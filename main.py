@@ -9,17 +9,16 @@ app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
 CRON_SECRET = os.getenv("CRON_SECRET")
-LINE_TOKEN = os.getenv("LINE_TOKEN")
-LINE_USER_ID = os.getenv("LINE_USER_ID")
-MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD")
+LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
+MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
 # 記錄已推播商品
 seen_items = set()
 
 
-async def send_line_message(message_payload):
-    """使用 LINE Messaging API 發送 Flex message"""
-    url = "https://api.line.me/v2/bot/message/push"
+async def send_broadcast_message(message_payload):
+    """使用 LINE Broadcast API 發送訊息給所有好友"""
+    url = "https://api.line.me/v2/bot/message/broadcast"
     headers = {
         "Authorization": f"Bearer {LINE_TOKEN}",
         "Content-Type": "application/json"
@@ -27,19 +26,40 @@ async def send_line_message(message_payload):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=message_payload) as resp:
             resp_text = await resp.text()
-            print("LINE 响應:", resp.status, resp_text)
+            print("LINE Broadcast 响應:", resp.status, resp_text)
 
 
-def build_flex_message(items):
-    """產生 Flex carousel message"""
+def build_flex_message(items, keyword, minutes, max_items=5):
+    """產生美觀的 Flex Message，最新 max_items 商品 + summary + 查看更多"""
     columns = []
-    for item in items[:10]:  # 最多 10 個 bubble
+
+    # 1️⃣ Summary Bubble
+    start_time = datetime.utcnow() - timedelta(minutes=minutes)
+    end_time = datetime.utcnow()
+    summary_text = f"📌 關鍵字: {keyword}\n🕒 時間區間: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')}\n✨ 新商品總數: {len(items)}"
+
+    columns.append({
+        "type": "bubble",
+        "size": "kilo",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "text", "text": "🔔 Mercari 新商品通知", "weight": "bold", "size": "lg", "align": "center"},
+                {"type": "separator", "margin": "md"},
+                {"type": "text", "text": summary_text, "wrap": True, "margin": "md", "color": "#555555"}
+            ]
+        }
+    })
+
+    # 2️⃣ 最新商品 Bubble (最多 max_items 件)
+    for item in items[:max_items]:
         columns.append({
             "type": "bubble",
             "size": "kilo",
             "hero": {
                 "type": "image",
-                "url": item["thumbnail"],
+                "url": item["thumbnail"] or "https://i.imgur.com/default.png",
                 "size": "full",
                 "aspectRatio": "20:13",
                 "aspectMode": "cover"
@@ -47,21 +67,59 @@ def build_flex_message(items):
             "body": {
                 "type": "box",
                 "layout": "vertical",
+                "spacing": "sm",
                 "contents": [
-                    {"type": "text", "text": item["name"][:40], "weight": "bold", "wrap": True},
-                    {"type": "text", "text": f"價格: {item['price']}", "wrap": True}
+                    {"type": "text", "text": item["name"][:40], "weight": "bold", "wrap": True, "size": "md"},
+                    {
+                        "type": "box",
+                        "layout": "baseline",
+                        "margin": "sm",
+                        "contents": [
+                            {"type": "text", "text": "💰 價格: ", "size": "sm", "color": "#888888"},
+                            {"type": "text", "text": str(item['price']), "size": "sm", "weight": "bold", "color": "#FF5555"}
+                        ]
+                    }
+                ]
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "color": "#00B900",
+                        "action": {"type": "uri", "label": "🔗 查看商品", "uri": item["url"]}
+                    }
+                ]
+            }
+        })
+
+    # 3️⃣ 查看全部按鈕 Bubble
+    if len(items) > max_items:
+        search_url = f"https://jp.mercari.com/search?keyword={keyword}"
+        columns.append({
+            "type": "bubble",
+            "size": "kilo",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": "📄 查看更多商品", "weight": "bold", "size": "lg", "align": "center"},
+                    {"type": "text", "text": "點擊下方按鈕前往 Mercari 查看完整列表", "wrap": True, "margin": "md", "color": "#555555"}
                 ]
             },
             "footer": {
                 "type": "box",
                 "layout": "vertical",
                 "contents": [
-                    {"type": "button", "action": {"type": "uri", "label": "查看商品", "uri": item["url"]}}
+                    {"type": "button", "style": "primary", "color": "#1E90FF", "action": {"type": "uri", "label": "查看更多", "uri": search_url}}
                 ]
             }
         })
+
     return {
-        "to": LINE_USER_ID,
         "messages": [
             {
                 "type": "flex",
@@ -83,6 +141,7 @@ async def check_new_items(keyword, since_minutes=60):
     new_items = []
 
     time_threshold = datetime.utcnow() - timedelta(minutes=since_minutes)
+    print(f"[DEBUG] Time threshold: {time_threshold}")
 
     for item in results.items:
         if item.id_ in seen_items:
@@ -96,9 +155,10 @@ async def check_new_items(keyword, since_minutes=60):
                 "thumbnail": item.thumbnails[0] if item.thumbnails else ""
             })
 
+    print(f"[DEBUG] New items: {len(new_items)}")
     if new_items:
-        payload = build_flex_message(new_items)
-        await send_line_message(payload)
+        payload = build_flex_message(new_items, keyword, since_minutes)
+        await send_broadcast_message(payload)
 
 
 # ---------------- LINE Webhook ----------------
@@ -137,14 +197,15 @@ async def line_webhook(req: Request):
 # ---------------- Vercel Cron Route ----------------
 @app.get("/cron")
 async def cron_job(keyword: str = MERCARI_KEYWORD, minutes: int = 60):
-    
     """定時自動抓取，minutes 可調整抓取範圍"""
     await check_new_items(keyword, since_minutes=minutes)
     return {"status": "ok"}
 
+
 @app.post("/")
 async def hear_beat(req: Request):
     return {"status": "ok", "request": req}
+
 
 @app.get("/")
 async def hello():
