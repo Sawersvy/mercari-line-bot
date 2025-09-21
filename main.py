@@ -6,12 +6,14 @@ from mercapi import Mercapi
 import aiohttp
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
+from mercapi.requests import SearchRequestData
 
 app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
 FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES") or 10)
-LINE_TOKEN = os.getenv("LINE_TOKEN") or "YOUR_LINE_TOKEN"
+FETCH_SINCE_MINUTES = 60
+LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
 # 記錄已推播商品
@@ -125,7 +127,7 @@ def build_flex_message(items, keyword, minutes, max_items=5):
 
     # 查看全部按鈕
     if len(items) > max_items:
-        search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}"
+        search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}&sort=created_time&order=desc"
         columns.append({
             "type": "bubble",
             "size": "kilo",
@@ -152,7 +154,7 @@ def build_flex_message(items, keyword, minutes, max_items=5):
 async def check_new_items(keyword, since_minutes=60):
     global seen_items
     m = Mercapi()
-    results = await m.search(keyword)
+    results = await m.search(keyword, sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME, sort_order=SearchRequestData.SortOrder.ORDER_DESC)
     new_items = []
 
     time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
@@ -211,16 +213,16 @@ async def line_webhook(req: Request):
             if text.startswith("今天"):
                 minutes = 24*60
                 keyword = text.replace("今天", "").strip() or keyword
-            elif text.startswith("近一週"):
-                minutes = 7*24*60
-                keyword = text.replace("近一週", "").strip() or keyword
-            elif text.startswith("近一個月"):
-                minutes = 30*24*60
-                keyword = text.replace("近一個月", "").strip() or keyword
+            # elif text.startswith("近一週"):
+            #     minutes = 7*24*60
+            #     keyword = text.replace("近一週", "").strip() or keyword
+            # elif text.startswith("近一個月"):
+            #     minutes = 30*24*60
+            #     keyword = text.replace("近一個月", "").strip() or keyword
 
             global seen_items
             m = Mercapi()
-            results = await m.search(keyword)
+            results = await m.search(keyword, sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME, sort_order=SearchRequestData.SortOrder.ORDER_DESC)
             new_items = []
 
             time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
