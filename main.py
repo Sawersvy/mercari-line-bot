@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from mercapi import Mercapi
 import aiohttp
@@ -196,8 +196,18 @@ async def line_webhook(req: Request):
 
 # ---------------- Vercel Cron Route ----------------
 @app.get("/cron")
-async def cron_job(keyword: str = MERCARI_KEYWORD, minutes: int = 60):
-    """定時自動抓取，minutes 可調整抓取範圍"""
+async def cron_job(request: Request, keyword: str = MERCARI_KEYWORD, minutes: int = 60):
+    # 驗證 CRON_SECRET
+    secret = os.getenv("CRON_SECRET")
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or auth_header != f"Bearer {secret}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # 確認是 Vercel Cron 觸發
+    if "x-vercel-cron" in request.headers:
+        print("Triggered by Vercel Cron")
+
+    # 執行抓取
     await check_new_items(keyword, since_minutes=minutes)
     return {"status": "ok"}
 
