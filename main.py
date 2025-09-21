@@ -1,5 +1,6 @@
 import asyncio
 import os
+import logging
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from mercapi import Mercapi
@@ -7,6 +8,14 @@ import aiohttp
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from mercapi.requests import SearchRequestData
+
+# ---------------- Logging 設定 ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    force=True  # 確保在 Vercel 重設 logging 設定
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -43,7 +52,7 @@ async def send_broadcast_message(message_payload):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=message_payload) as resp:
             resp_text = await resp.text()
-            print("LINE Broadcast 响應:", resp.status, resp_text)
+            logger.info(f"LINE Broadcast 響應: {resp.status} {resp_text}")
 
 async def send_reply_message(reply_token, messages):
     url = "https://api.line.me/v2/bot/message/reply"
@@ -55,7 +64,7 @@ async def send_reply_message(reply_token, messages):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             resp_text = await resp.text()
-            print("LINE Reply 响應:", resp.status, resp_text)
+            logger.info(f"LINE Reply 響應: {resp.status} {resp_text}")
 
 # ---------------- Flex Message ----------------
 def build_flex_message(items, keyword, minutes, max_items=5):
@@ -154,11 +163,15 @@ def build_flex_message(items, keyword, minutes, max_items=5):
 async def check_new_items(keyword, since_minutes=60):
     global seen_items
     m = Mercapi()
-    results = await m.search(keyword, sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME, sort_order=SearchRequestData.SortOrder.ORDER_DESC)
+    results = await m.search(
+        keyword,
+        sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME,
+        sort_order=SearchRequestData.SortOrder.ORDER_DESC
+    )
     new_items = []
 
     time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
-    print(f"[DEBUG] Time threshold: {time_threshold}")
+    logger.info(f"[DEBUG] Time threshold: {time_threshold}")
 
     for item in results.items:
         item_created = to_utc_aware(item.created)
@@ -173,7 +186,7 @@ async def check_new_items(keyword, since_minutes=60):
             "created": item_created
         })
 
-    print(f"[DEBUG] New items: {len(new_items)}")
+    logger.info(f"[DEBUG] New items: {len(new_items)}")
     if new_items:
         payload = build_flex_message(new_items, keyword, since_minutes)
         await send_broadcast_message(payload)
@@ -186,7 +199,7 @@ async def periodic_fetch():
             minutes = int(os.getenv("FETCH_SINCE_MINUTES") or 60)
             await check_new_items(keyword, since_minutes=minutes)
         except Exception as e:
-            print(f"[ERROR] Background fetch failed: {e}")
+            logger.error(f"[ERROR] Background fetch failed: {e}")
         await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)
 
 @app.on_event("startup")
@@ -213,16 +226,14 @@ async def line_webhook(req: Request):
             if text.startswith("今天"):
                 minutes = 24*60
                 keyword = text.replace("今天", "").strip() or keyword
-            # elif text.startswith("近一週"):
-            #     minutes = 7*24*60
-            #     keyword = text.replace("近一週", "").strip() or keyword
-            # elif text.startswith("近一個月"):
-            #     minutes = 30*24*60
-            #     keyword = text.replace("近一個月", "").strip() or keyword
 
             global seen_items
             m = Mercapi()
-            results = await m.search(keyword, sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME, sort_order=SearchRequestData.SortOrder.ORDER_DESC)
+            results = await m.search(
+                keyword,
+                sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME,
+                sort_order=SearchRequestData.SortOrder.ORDER_DESC
+            )
             new_items = []
 
             time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
