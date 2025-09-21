@@ -1,24 +1,38 @@
 import asyncio
 import os
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from mercapi import Mercapi
 import aiohttp
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
-FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES") or 10)  # 預設每 10 分鐘抓一次
-LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
+FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES") or 10)
+LINE_TOKEN = os.getenv("LINE_TOKEN") or "YOUR_LINE_TOKEN"
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
 # 記錄已推播商品
 seen_items = set()
 
+# ---------------- 時區處理 ----------------
+TW_TZ = timezone(timedelta(hours=8))
 
+def to_utc_aware(dt: datetime) -> datetime:
+    """將 naive datetime 視為 UTC 並轉成 aware"""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+def to_tw_time(dt: datetime) -> datetime:
+    """將 datetime 轉成台灣時區"""
+    dt = to_utc_aware(dt)
+    return dt.astimezone(TW_TZ)
+
+# ---------------- LINE 發送 ----------------
 async def send_broadcast_message(message_payload):
-    """使用 LINE Broadcast API 發送訊息給所有好友"""
     url = "https://api.line.me/v2/bot/message/broadcast"
     headers = {
         "Authorization": f"Bearer {LINE_TOKEN}",
@@ -29,16 +43,30 @@ async def send_broadcast_message(message_payload):
             resp_text = await resp.text()
             print("LINE Broadcast 响應:", resp.status, resp_text)
 
-TW_TZ = timezone(timedelta(hours=8))
+async def send_reply_message(reply_token, messages):
+    url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Authorization": f"Bearer {LINE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {"replyToken": reply_token, "messages": messages}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as resp:
+            resp_text = await resp.text()
+            print("LINE Reply 响應:", resp.status, resp_text)
+
+# ---------------- Flex Message ----------------
 def build_flex_message(items, keyword, minutes, max_items=5):
-    """產生美觀的 Flex Message，最新 max_items 商品 + summary + 查看更多"""
     columns = []
 
-    # 1️⃣ Summary Bubble
-    start_time = (datetime.utcnow() - timedelta(minutes=minutes)).replace(tzinfo=timezone.utc).astimezone(TW_TZ)
-    end_time = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(TW_TZ)
-    summary_text = f"📌 關鍵字: {keyword}\n🕒 時間區間: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')}\n✨ 新商品總數: {len(items)}"
-
+    # Summary
+    start_time = to_tw_time(datetime.now(timezone.utc) - timedelta(minutes=minutes))
+    end_time = to_tw_time(datetime.now(timezone.utc))
+    summary_text = (
+        f"📌 關鍵字: {keyword}\n"
+        f"🕒 時間區間: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')}\n"
+        f"✨ 新商品總數: {len(items)}"
+    )
     columns.append({
         "type": "bubble",
         "size": "kilo",
@@ -53,13 +81,10 @@ def build_flex_message(items, keyword, minutes, max_items=5):
         }
     })
 
-    # 2️⃣ 最新商品 Bubble (最多 max_items 件)
+    # 最新商品
     for item in items[:max_items]:
-        # 將上架時間轉成台灣時間
-        created_utc = getattr(item, "created", datetime.utcnow()).replace(tzinfo=timezone.utc)
-        created_tw = created_utc.astimezone(TW_TZ)
+        created_tw = to_tw_time(item["created"])
         created_str = created_tw.strftime("%Y-%m-%d %H:%M")
-
         columns.append({
             "type": "bubble",
             "size": "kilo",
@@ -85,13 +110,7 @@ def build_flex_message(items, keyword, minutes, max_items=5):
                             {"type": "text", "text": f"¥{item['price']}", "size": "sm", "weight": "bold", "color": "#FF5555"}
                         ]
                     },
-                    {
-                        "type": "text",
-                        "text": f"🕒 上架時間: {created_str}", 
-                        "size": "sm",
-                        "color": "#888888",
-                        "margin": "sm"
-                    }
+                    {"type": "text", "text": f"🕒 上架時間: {created_str}", "size": "sm", "color": "#888888", "margin": "sm"}
                 ]
             },
             "footer": {
@@ -99,19 +118,14 @@ def build_flex_message(items, keyword, minutes, max_items=5):
                 "layout": "vertical",
                 "spacing": "sm",
                 "contents": [
-                    {
-                        "type": "button",
-                        "style": "primary",
-                        "color": "#00B900",
-                        "action": {"type": "uri", "label": "🔗 查看商品", "uri": item["url"]}
-                    }
+                    {"type": "button", "style": "primary", "color": "#00B900", "action": {"type": "uri", "label": "🔗 查看商品", "uri": item["url"]}}
                 ]
             }
         })
 
-    # 3️⃣ 查看全部按鈕 Bubble
+    # 查看全部按鈕
     if len(items) > max_items:
-        search_url = f"https://jp.mercari.com/search?keyword={keyword}"
+        search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}"
         columns.append({
             "type": "bubble",
             "size": "kilo",
@@ -132,85 +146,50 @@ def build_flex_message(items, keyword, minutes, max_items=5):
             }
         })
 
-    return {
-        "messages": [
-            {
-                "type": "flex",
-                "altText": "有新 Mercari 商品！",
-                "contents": {
-                    "type": "carousel",
-                    "contents": columns
-                }
-            }
-        ]
-    }
+    return {"messages": [{"type": "flex", "altText": "有新 Mercari 商品！", "contents": {"type": "carousel", "contents": columns}}]}
 
-
+# ---------------- 抓取新商品 ----------------
 async def check_new_items(keyword, since_minutes=60):
-    """抓取指定時間內的新商品"""
     global seen_items
     m = Mercapi()
     results = await m.search(keyword)
     new_items = []
 
-    time_threshold = datetime.utcnow() - timedelta(minutes=since_minutes)
+    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
     print(f"[DEBUG] Time threshold: {time_threshold}")
 
     for item in results.items:
-        if item.id_ in seen_items:
+        item_created = to_utc_aware(item.created)
+        if item.id_ in seen_items or item_created < time_threshold:
             continue
-        if item.created >= time_threshold:
-            seen_items.add(item.id_)
-            new_items.append({
-                "name": item.name,
-                "price": item.price,
-                "url": f"https://jp.mercari.com/item/{item.id_}",
-                "thumbnail": item.thumbnails[0] if item.thumbnails else ""
-            })
+        seen_items.add(item.id_)
+        new_items.append({
+            "name": item.name,
+            "price": item.price,
+            "url": f"https://jp.mercari.com/item/{item.id_}",
+            "thumbnail": item.thumbnails[0] if item.thumbnails else "",
+            "created": item_created
+        })
 
     print(f"[DEBUG] New items: {len(new_items)}")
     if new_items:
         payload = build_flex_message(new_items, keyword, since_minutes)
         await send_broadcast_message(payload)
 
-
 # ---------------- Background Task ----------------
 async def periodic_fetch():
-    """每 FETCH_INTERVAL_MINUTES 執行一次抓取"""
     while True:
         try:
             keyword = os.getenv("MERCARI_KEYWORD") or MERCARI_KEYWORD
             minutes = int(os.getenv("FETCH_SINCE_MINUTES") or 60)
-            print(f"[INFO] Background fetch: keyword={keyword}, minutes={minutes}")
             await check_new_items(keyword, since_minutes=minutes)
         except Exception as e:
             print(f"[ERROR] Background fetch failed: {e}")
-        await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)  # interval 秒數
-
+        await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)
 
 @app.on_event("startup")
 async def startup_event():
-    """啟動時自動啟動背景任務"""
     asyncio.create_task(periodic_fetch())
-
-
-async def send_reply_message(reply_token, messages):
-    """回覆單一使用者訊息"""
-    url = "https://api.line.me/v2/bot/message/reply"
-    headers = {
-        "Authorization": f"Bearer {LINE_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "replyToken": reply_token,
-        "messages": messages
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            resp_text = await resp.text()
-            print("LINE Reply 响應:", resp.status, resp_text)
-
-
 
 # ---------------- LINE Webhook ----------------
 class LineEvent(BaseModel):
@@ -218,10 +197,8 @@ class LineEvent(BaseModel):
     message: dict
     replyToken: str = None
 
-
 @app.post("/webhook")
 async def line_webhook(req: Request):
-    """接收 LINE 指令，只回覆觸發該訊息的使用者"""
     body = await req.json()
     events = body.get("events", [])
 
@@ -229,45 +206,44 @@ async def line_webhook(req: Request):
         if event["type"] == "message" and event["message"]["type"] == "text":
             text = event["message"]["text"].strip()
             keyword = MERCARI_KEYWORD
-            minutes = 60  # 預設抓取 1 小時
+            minutes = 60
 
             if text.startswith("今天"):
-                minutes = 24 * 60
+                minutes = 24*60
                 keyword = text.replace("今天", "").strip() or keyword
             elif text.startswith("近一週"):
-                minutes = 7 * 24 * 60
+                minutes = 7*24*60
                 keyword = text.replace("近一週", "").strip() or keyword
             elif text.startswith("近一個月"):
-                minutes = 30 * 24 * 60
+                minutes = 30*24*60
                 keyword = text.replace("近一個月", "").strip() or keyword
 
-            # 取得新商品
             global seen_items
             m = Mercapi()
             results = await m.search(keyword)
             new_items = []
-            time_threshold = datetime.utcnow() - timedelta(minutes=minutes)
 
+            time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
             for item in results.items:
-                if item.id_ in seen_items:
+                item_created = to_utc_aware(item.created)
+                if item.id_ in seen_items or item_created < time_threshold:
                     continue
-                if item.created >= time_threshold:
-                    seen_items.add(item.id_)
-                    new_items.append({
-                        "name": item.name,
-                        "price": item.price,
-                        "url": f"https://jp.mercari.com/item/{item.id_}",
-                        "thumbnail": item.thumbnails[0] if item.thumbnails else ""
-                    })
+                seen_items.add(item.id_)
+                new_items.append({
+                    "name": item.name,
+                    "price": item.price,
+                    "url": f"https://jp.mercari.com/item/{item.id_}",
+                    "thumbnail": item.thumbnails[0] if item.thumbnails else "",
+                    "created": item_created
+                })
 
             if new_items:
                 payload = build_flex_message(new_items, keyword, minutes)
                 reply_token = event.get("replyToken")
                 if reply_token:
                     await send_reply_message(reply_token, payload["messages"])
+
     return {"status": "ok"}
-
-
 
 # ---------------- 測試 Endpoint ----------------
 @app.get("/")
