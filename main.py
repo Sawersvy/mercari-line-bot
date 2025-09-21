@@ -8,7 +8,7 @@ import aiohttp
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from mercapi.requests import SearchRequestData
-
+from zoneinfo import ZoneInfo
 # ---------------- Logging 設定 ----------------
 logging.basicConfig(
     level=logging.INFO,
@@ -25,11 +25,9 @@ FETCH_SINCE_MINUTES = 60
 LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
-# 記錄已推播商品
-seen_items = set()
-
 # ---------------- 時區處理 ----------------
-TW_TZ = timezone(timedelta(hours=8))
+# 預設台灣時區 (Asia/Taipei)，也可以換成 Asia/Tokyo, UTC 等
+USER_TZ = os.getenv("USER_TIMEZONE", "Asia/Taipei")
 
 def to_utc_aware(dt: datetime) -> datetime:
     """將 naive datetime 視為 UTC 並轉成 aware"""
@@ -37,10 +35,10 @@ def to_utc_aware(dt: datetime) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
-def to_tw_time(dt: datetime) -> datetime:
-    """將 datetime 轉成台灣時區"""
+def to_user_time(dt: datetime) -> datetime:
+    """轉換 UTC datetime 到使用者時區"""
     dt = to_utc_aware(dt)
-    return dt.astimezone(TW_TZ)
+    return dt.astimezone(ZoneInfo(USER_TZ))
 
 # ---------------- LINE 發送 ----------------
 async def send_broadcast_message(message_payload):
@@ -71,8 +69,8 @@ def build_flex_message(items, keyword, minutes, max_items=5):
     columns = []
 
     # Summary
-    start_time = to_tw_time(datetime.now(timezone.utc) - timedelta(minutes=minutes))
-    end_time = to_tw_time(datetime.now(timezone.utc))
+    start_time = to_user_time(datetime.now(timezone.utc) - timedelta(minutes=minutes))
+    end_time = to_user_time(datetime.now(timezone.utc))
     summary_text = (
         f"📌 關鍵字: {keyword}\n"
         f"🕒 時間區間: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')}\n"
@@ -94,7 +92,7 @@ def build_flex_message(items, keyword, minutes, max_items=5):
 
     # 最新商品
     for item in items[:max_items]:
-        created_tw = to_tw_time(item["created"])
+        created_tw = to_user_time(item["created"])
         created_str = created_tw.strftime("%Y-%m-%d %H:%M")
         columns.append({
             "type": "bubble",
@@ -161,12 +159,11 @@ def build_flex_message(items, keyword, minutes, max_items=5):
 
 # ---------------- 抓取新商品 ----------------
 async def check_new_items(keyword, since_minutes=60):
-    global seen_items
     m = Mercapi()
     results = await m.search(
         keyword,
         sort_by=SearchRequestData.SortBy.SORT_CREATED_TIME,
-        sort_order=SearchRequestData.SortOrder.ORDER_DESC
+        sort_order=SearchRequestData.SortOrder.ORDER_DESC,
     )
     new_items = []
 
@@ -175,9 +172,8 @@ async def check_new_items(keyword, since_minutes=60):
 
     for item in results.items:
         item_created = to_utc_aware(item.created)
-        if item.id_ in seen_items or item_created < time_threshold:
+        if item_created < time_threshold:
             continue
-        seen_items.add(item.id_)
         new_items.append({
             "name": item.name,
             "price": item.price,
@@ -227,7 +223,6 @@ async def line_webhook(req: Request):
                 minutes = 24*60
                 keyword = text.replace("今天", "").strip() or keyword
 
-            global seen_items
             m = Mercapi()
             results = await m.search(
                 keyword,
@@ -239,9 +234,8 @@ async def line_webhook(req: Request):
             time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
             for item in results.items:
                 item_created = to_utc_aware(item.created)
-                if item.id_ in seen_items or item_created < time_threshold:
+                if item_created < time_threshold:
                     continue
-                seen_items.add(item.id_)
                 new_items.append({
                     "name": item.name,
                     "price": item.price,
