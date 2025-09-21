@@ -1,17 +1,16 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from mercapi import Mercapi
 import aiohttp
-import asyncio
 from datetime import datetime, timedelta
 
 app = FastAPI()
 
-# LINE 配置
+# ---------------- LINE 配置 ----------------
 LINE_TOKEN = "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
-LINE_USER_ID = "U228876c32a3e9df73d65253632f91f62"  # 可是群組 ID
+LINE_USER_ID = "U228876c32a3e9df73d65253632f91f62"
 
-# 已發送商品記錄
+# 記錄已推播商品
 seen_items = set()
 
 
@@ -99,8 +98,7 @@ async def check_new_items(keyword, since_minutes=60):
         await send_line_message(payload)
 
 
-# -------------------------------------------
-# LINE Webhook 接收格式
+# ---------------- LINE Webhook ----------------
 class LineEvent(BaseModel):
     type: str
     message: dict
@@ -116,18 +114,30 @@ async def line_webhook(req: Request):
     for event in events:
         if event["type"] == "message" and event["message"]["type"] == "text":
             text = event["message"]["text"].strip()
+            keyword = "オラフ スヌーピー ぬいぐるみ"
+            minutes = 60  # 預設抓取 1 小時
+
             if text.startswith("今天"):
-                # 範例：今天 新商品
-                keyword = text.replace("今天", "").strip()
-                keyword = keyword or "オラフ スヌーピー ぬいぐるみ"
-                await check_new_items(keyword, since_minutes=1440)  # 24 小時
+                minutes = 24 * 60
+                keyword = text.replace("今天", "").strip() or keyword
+            elif text.startswith("近一週"):
+                minutes = 7 * 24 * 60
+                keyword = text.replace("近一週", "").strip() or keyword
+            elif text.startswith("近一個月"):
+                minutes = 30 * 24 * 60
+                keyword = text.replace("近一個月", "").strip() or keyword
+
+            await check_new_items(keyword, since_minutes=minutes)
     return {"status": "ok"}
 
 
-# -------------------------------------------
-# Vercel cron route
+# ---------------- Vercel Cron Route ----------------
 @app.get("/cron")
-async def cron_job(keyword: str = "オラフ スヌーピー ぬいぐるみ"):
-    """每小時自動抓取"""
-    await check_new_items(keyword, since_minutes=60)
+async def cron_job(keyword: str = "オラフ スヌーピー ぬいぐるみ", minutes: int = 60):
+    """定時自動抓取，minutes 可調整抓取範圍"""
+    await check_new_items(keyword, since_minutes=minutes)
     return {"status": "ok"}
+
+@app.get("/")
+async def hello():
+    return "HELLO"
