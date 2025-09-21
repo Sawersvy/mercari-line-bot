@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from mercapi import Mercapi
@@ -7,8 +8,10 @@ from datetime import datetime, timedelta
 app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
-LINE_TOKEN = "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
-LINE_USER_ID = "U228876c32a3e9df73d65253632f91f62"
+CRON_SECRET = os.getenv("CRON_SECRET")
+LINE_TOKEN = os.getenv("LINE_TOKEN")
+LINE_USER_ID = os.getenv("LINE_USER_ID")
+MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD")
 
 # 記錄已推播商品
 seen_items = set()
@@ -114,7 +117,7 @@ async def line_webhook(req: Request):
     for event in events:
         if event["type"] == "message" and event["message"]["type"] == "text":
             text = event["message"]["text"].strip()
-            keyword = "オラフ スヌーピー ぬいぐるみ"
+            keyword = MERCARI_KEYWORD
             minutes = 60  # 預設抓取 1 小時
 
             if text.startswith("今天"):
@@ -133,14 +136,15 @@ async def line_webhook(req: Request):
 
 # ---------------- Vercel Cron Route ----------------
 @app.get("/cron")
-async def cron_job(keyword: str = "オラフ スヌーピー ぬいぐるみ", minutes: int = 60):
+async def cron_job(keyword: str = MERCARI_KEYWORD, minutes: int = 60):
+    
     """定時自動抓取，minutes 可調整抓取範圍"""
     await check_new_items(keyword, since_minutes=minutes)
     return {"status": "ok"}
 
 @app.post("/")
 async def hear_beat(req: Request):
-    return {"status": "ok"}
+    return {"status": "ok", "request": req}
 
 @app.get("/")
 async def hello():
