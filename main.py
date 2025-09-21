@@ -138,6 +138,10 @@ async def cron_job(keyword: str = "オラフ スヌーピー ぬいぐるみ", m
     await check_new_items(keyword, since_minutes=minutes)
     return {"status": "ok"}
 
+@app.post("/")
+async def hear_beat(req: Request):
+    return {"status": "ok"}
+
 @app.get("/")
 async def hello():
     return "HELLO"
