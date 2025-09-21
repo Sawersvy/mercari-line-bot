@@ -264,7 +264,7 @@ async def line_webhook(req: Request):
                 payload = build_flex_message(new_items, keyword, minutes)
                 reply_token = event.get("replyToken")
                 if reply_token:
-                    await send_reply_message(reply_token, payload)
+                    await send_reply_message(reply_token, payload["messages"])
     return {"status": "ok"}
 
 
