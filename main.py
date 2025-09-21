@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from mercapi import Mercapi
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 app = FastAPI()
 
@@ -29,14 +29,14 @@ async def send_broadcast_message(message_payload):
             resp_text = await resp.text()
             print("LINE Broadcast 响應:", resp.status, resp_text)
 
-
+TW_TZ = timezone(timedelta(hours=8))
 def build_flex_message(items, keyword, minutes, max_items=5):
     """產生美觀的 Flex Message，最新 max_items 商品 + summary + 查看更多"""
     columns = []
 
     # 1️⃣ Summary Bubble
-    start_time = datetime.utcnow() - timedelta(minutes=minutes)
-    end_time = datetime.utcnow()
+    start_time = (datetime.utcnow() - timedelta(minutes=minutes)).replace(tzinfo=timezone.utc).astimezone(TW_TZ)
+    end_time = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(TW_TZ)
     summary_text = f"📌 關鍵字: {keyword}\n🕒 時間區間: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')}\n✨ 新商品總數: {len(items)}"
 
     columns.append({
@@ -55,6 +55,11 @@ def build_flex_message(items, keyword, minutes, max_items=5):
 
     # 2️⃣ 最新商品 Bubble (最多 max_items 件)
     for item in items[:max_items]:
+        # 將上架時間轉成台灣時間
+        created_utc = getattr(item, "created", datetime.utcnow()).replace(tzinfo=timezone.utc)
+        created_tw = created_utc.astimezone(TW_TZ)
+        created_str = created_tw.strftime("%Y-%m-%d %H:%M")
+
         columns.append({
             "type": "bubble",
             "size": "kilo",
@@ -77,8 +82,15 @@ def build_flex_message(items, keyword, minutes, max_items=5):
                         "margin": "sm",
                         "contents": [
                             {"type": "text", "text": "💰 價格: ", "size": "sm", "color": "#888888"},
-                            {"type": "text", "text": str(item['price']), "size": "sm", "weight": "bold", "color": "#FF5555"}
+                            {"type": "text", "text": f"¥{item['price']}", "size": "sm", "weight": "bold", "color": "#FF5555"}
                         ]
+                    },
+                    {
+                        "type": "text",
+                        "text": f"🕒 上架時間: {created_str}", 
+                        "size": "sm",
+                        "color": "#888888",
+                        "margin": "sm"
                     }
                 ]
             },
@@ -182,6 +194,24 @@ async def startup_event():
     asyncio.create_task(periodic_fetch())
 
 
+async def send_reply_message(reply_token, messages):
+    """回覆單一使用者訊息"""
+    url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Authorization": f"Bearer {LINE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "replyToken": reply_token,
+        "messages": messages
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as resp:
+            resp_text = await resp.text()
+            print("LINE Reply 响應:", resp.status, resp_text)
+
+
+
 # ---------------- LINE Webhook ----------------
 class LineEvent(BaseModel):
     type: str
@@ -191,7 +221,7 @@ class LineEvent(BaseModel):
 
 @app.post("/webhook")
 async def line_webhook(req: Request):
-    """接收 LINE 指令"""
+    """接收 LINE 指令，只回覆觸發該訊息的使用者"""
     body = await req.json()
     events = body.get("events", [])
 
@@ -211,8 +241,32 @@ async def line_webhook(req: Request):
                 minutes = 30 * 24 * 60
                 keyword = text.replace("近一個月", "").strip() or keyword
 
-            await check_new_items(keyword, since_minutes=minutes)
+            # 取得新商品
+            global seen_items
+            m = Mercapi()
+            results = await m.search(keyword)
+            new_items = []
+            time_threshold = datetime.utcnow() - timedelta(minutes=minutes)
+
+            for item in results.items:
+                if item.id_ in seen_items:
+                    continue
+                if item.created >= time_threshold:
+                    seen_items.add(item.id_)
+                    new_items.append({
+                        "name": item.name,
+                        "price": item.price,
+                        "url": f"https://jp.mercari.com/item/{item.id_}",
+                        "thumbnail": item.thumbnails[0] if item.thumbnails else ""
+                    })
+
+            if new_items:
+                payload = build_flex_message(new_items, keyword, minutes)
+                reply_token = event.get("replyToken")
+                if reply_token:
+                    await send_reply_message(reply_token, payload)
     return {"status": "ok"}
+
 
 
 # ---------------- 測試 Endpoint ----------------
