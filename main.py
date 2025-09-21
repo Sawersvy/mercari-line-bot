@@ -1,3 +1,4 @@
+import asyncio
 import os
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -8,7 +9,7 @@ from datetime import datetime, timedelta
 app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
-CRON_SECRET = os.getenv("CRON_SECRET")
+FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES") or 10)  # 預設每 10 分鐘抓一次
 LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
@@ -161,6 +162,26 @@ async def check_new_items(keyword, since_minutes=60):
         await send_broadcast_message(payload)
 
 
+# ---------------- Background Task ----------------
+async def periodic_fetch():
+    """每 FETCH_INTERVAL_MINUTES 執行一次抓取"""
+    while True:
+        try:
+            keyword = os.getenv("MERCARI_KEYWORD") or MERCARI_KEYWORD
+            minutes = int(os.getenv("FETCH_SINCE_MINUTES") or 60)
+            print(f"[INFO] Background fetch: keyword={keyword}, minutes={minutes}")
+            await check_new_items(keyword, since_minutes=minutes)
+        except Exception as e:
+            print(f"[ERROR] Background fetch failed: {e}")
+        await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)  # interval 秒數
+
+
+@app.on_event("startup")
+async def startup_event():
+    """啟動時自動啟動背景任務"""
+    asyncio.create_task(periodic_fetch())
+
+
 # ---------------- LINE Webhook ----------------
 class LineEvent(BaseModel):
     type: str
@@ -194,29 +215,7 @@ async def line_webhook(req: Request):
     return {"status": "ok"}
 
 
-# ---------------- Vercel Cron Route ----------------
-@app.get("/cron")
-async def cron_job(request: Request, keyword: str = MERCARI_KEYWORD, minutes: int = 60):
-    # 驗證 CRON_SECRET
-    secret = os.getenv("CRON_SECRET")
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or auth_header != f"Bearer {secret}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    # 確認是 Vercel Cron 觸發
-    if "x-vercel-cron" in request.headers:
-        print("Triggered by Vercel Cron")
-
-    # 執行抓取
-    await check_new_items(keyword, since_minutes=minutes)
-    return {"status": "ok"}
-
-
-@app.post("/")
-async def hear_beat(req: Request):
-    return {"status": "ok", "request": req}
-
-
+# ---------------- 測試 Endpoint ----------------
 @app.get("/")
 async def hello():
-    return "HELLO"
+    return {"status": "ok", "message": "HELLO"}
