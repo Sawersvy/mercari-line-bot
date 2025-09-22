@@ -157,6 +157,10 @@ async def check_new_items(keyword, since_minutes=60):
         item_updated = to_utc_aware(item.updated)
         if item_updated < time_threshold:
             continue
+            
+        if getattr(item, "status", "") == "ITEM_STATUS_TRADING":
+            continue
+    
         new_items.append({
             "name": item.name,
             "price": item.price,
@@ -215,6 +219,9 @@ async def line_webhook(req: Request):
             for item in results.items:
                 item_updated = to_utc_aware(item.updated)
                 if item_updated < time_threshold:
+                    continue
+                
+                if getattr(item, "status", "") == "ITEM_STATUS_TRADING":
                     continue
 
                 new_items.append({
