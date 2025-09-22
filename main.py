@@ -23,6 +23,7 @@ app = FastAPI()
 FETCH_SINCE_MINUTES = int(os.getenv("FETCH_SINCE_MINUTES") or 10)
 LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
+OVERLAP_MINUTES = 2
 
 # ---------------- 時區處理 ----------------
 USER_TZ = os.getenv("USER_TIMEZONE", "Asia/Taipei")
@@ -150,9 +151,8 @@ async def check_new_items(keyword, since_minutes=60):
         sort_order=SearchRequestData.SortOrder.ORDER_DESC,
     )
     new_items = []
-    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes) + OVERLAP_MINUTES
     logger.info(f"[DEBUG] Time threshold: {time_threshold}")
-
     for item in results.items:
         item_updated = to_utc_aware(item.updated)
         if item_updated < time_threshold:
