@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
-FETCH_SINCE_MINUTES = int(os.getenv("FETCH_SINCE_MINUTES") or 60)
+FETCH_SINCE_MINUTES = int(os.getenv("FETCH_SINCE_MINUTES") or 10)
 LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
@@ -71,7 +71,11 @@ def build_flex_message(items, keyword, minutes, max_items=5):
         f"🕒 時間區間: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')}\n"
         f"✨ 新商品總數: {len(items)}"
     )
-    columns.append({
+
+    search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}&sort=created_time&order=desc"
+
+    # summary bubble
+    summary_bubble = {
         "type": "bubble",
         "size": "kilo",
         "body": {
@@ -82,8 +86,17 @@ def build_flex_message(items, keyword, minutes, max_items=5):
                 {"type": "separator", "margin": "md"},
                 {"type": "text", "text": summary_text, "wrap": True, "margin": "md", "color": "#555555"}
             ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {"type": "button", "style": "primary", "color": "#1E90FF",
+                 "action": {"type": "uri", "label": "🔍 Mercari 搜尋", "uri": search_url}}
+            ]
         }
-    })
+    }
+    columns.append(summary_bubble)
 
     for item in items[:max_items]:
         updated_tw = to_user_time(item["updated"])
@@ -122,28 +135,6 @@ def build_flex_message(items, keyword, minutes, max_items=5):
                 "spacing": "sm",
                 "contents": [
                     {"type": "button", "style": "primary", "color": "#00B900", "action": {"type": "uri", "label": "🔗 查看商品", "uri": item["url"]}}
-                ]
-            }
-        })
-
-    if len(items) > max_items:
-        search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}&sort=updated_time&order=desc"
-        columns.append({
-            "type": "bubble",
-            "size": "kilo",
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {"type": "text", "text": "📄 查看更多商品", "weight": "bold", "size": "lg", "align": "center"},
-                    {"type": "text", "text": "點擊下方按鈕前往 Mercari 查看完整列表", "wrap": True, "margin": "md", "color": "#555555"}
-                ]
-            },
-            "footer": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {"type": "button", "style": "primary", "color": "#1E90FF", "action": {"type": "uri", "label": "查看更多", "uri": search_url}}
                 ]
             }
         })
@@ -225,7 +216,7 @@ async def line_webhook(req: Request):
                 item_updated = to_utc_aware(item.updated)
                 if item_updated < time_threshold:
                     continue
-                
+
                 new_items.append({
                     "name": item.name,
                     "price": item.price,
@@ -233,14 +224,20 @@ async def line_webhook(req: Request):
                     "thumbnail": item.thumbnails[0] if item.thumbnails else "",
                     "updated": item_updated
                 })
-                
+
             logger.info(f"[DEBUG] New items: {len(new_items)}")
 
-            if new_items:
-                payload = build_flex_message(new_items, keyword, minutes)
-                reply_token = event.get("replyToken")
-                if reply_token:
+            reply_token = event.get("replyToken")
+            if reply_token:
+                if new_items:
+                    payload = build_flex_message(new_items, keyword, minutes)
                     await send_reply_message(reply_token, payload["messages"])
+                else:
+                    # 沒有新商品就回覆提示
+                    await send_reply_message(reply_token, [{
+                        "type": "text",
+                        "text": f"❌ 在 {minutes} 分鐘內沒有找到「{keyword}」的新商品。"
+                    }])
 
     return {"status": "ok"}
 
