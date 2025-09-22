@@ -86,8 +86,8 @@ def build_flex_message(items, keyword, minutes, max_items=5):
     })
 
     for item in items[:max_items]:
-        created_tw = to_user_time(item["created"])
-        created_str = created_tw.strftime("%Y-%m-%d %H:%M")
+        updated_tw = to_user_time(item["updated"])
+        updated_str = updated_tw.strftime("%Y-%m-%d %H:%M")
         columns.append({
             "type": "bubble",
             "size": "kilo",
@@ -113,7 +113,7 @@ def build_flex_message(items, keyword, minutes, max_items=5):
                             {"type": "text", "text": f"¥{item['price']}", "size": "sm", "weight": "bold", "color": "#FF5555"}
                         ]
                     },
-                    {"type": "text", "text": f"🕒 上架時間: {created_str}", "size": "sm", "color": "#888888", "margin": "sm"}
+                    {"type": "text", "text": f"🕒 上架時間: {updated_str}", "size": "sm", "color": "#888888", "margin": "sm"}
                 ]
             },
             "footer": {
@@ -127,7 +127,7 @@ def build_flex_message(items, keyword, minutes, max_items=5):
         })
 
     if len(items) > max_items:
-        search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}&sort=created_time&order=desc"
+        search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}&sort=updated_time&order=desc"
         columns.append({
             "type": "bubble",
             "size": "kilo",
@@ -163,18 +163,19 @@ async def check_new_items(keyword, since_minutes=60):
     logger.info(f"[DEBUG] Time threshold: {time_threshold}")
 
     for item in results.items:
-        item_created = to_utc_aware(item.created)
-        if item_created < time_threshold:
-            continue
+        item_updated = to_utc_aware(item.updated)
+        # if item_updated < time_threshold:
+        #     continue
         new_items.append({
             "name": item.name,
             "price": item.price,
             "url": f"https://jp.mercari.com/item/{item.id_}",
             "thumbnail": item.thumbnails[0] if item.thumbnails else "",
-            "created": item_created
+            "updated": item_updated
         })
 
     logger.info(f"[DEBUG] New items: {len(new_items)}")
+    
     if new_items:
         payload = build_flex_message(new_items, keyword, since_minutes)
         await send_broadcast_message(payload)
@@ -221,16 +222,19 @@ async def line_webhook(req: Request):
             new_items = []
             time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
             for item in results.items:
-                item_created = to_utc_aware(item.created)
-                if item_created < time_threshold:
+                item_updated = to_utc_aware(item.updated)
+                if item_updated < time_threshold:
                     continue
+                
                 new_items.append({
                     "name": item.name,
                     "price": item.price,
                     "url": f"https://jp.mercari.com/item/{item.id_}",
                     "thumbnail": item.thumbnails[0] if item.thumbnails else "",
-                    "created": item_created
+                    "updated": item_updated
                 })
+                
+            logger.info(f"[DEBUG] New items: {len(new_items)}")
 
             if new_items:
                 payload = build_flex_message(new_items, keyword, minutes)
