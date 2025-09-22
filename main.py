@@ -164,8 +164,8 @@ async def check_new_items(keyword, since_minutes=60):
 
     for item in results.items:
         item_updated = to_utc_aware(item.updated)
-        # if item_updated < time_threshold:
-        #     continue
+        if item_updated < time_threshold:
+            continue
         new_items.append({
             "name": item.name,
             "price": item.price,
