@@ -175,8 +175,8 @@ async def check_new_items(keyword, since_minutes=60):
 @app.get("/cron")
 async def cron_fetch():
     try:
-        keyword = os.getenv("MERCARI_KEYWORD") or MERCARI_KEYWORD
-        minutes = int(os.getenv("FETCH_SINCE_MINUTES") or FETCH_SINCE_MINUTES)
+        keyword = MERCARI_KEYWORD
+        minutes = FETCH_SINCE_MINUTES
         await check_new_items(keyword, since_minutes=minutes)
         return {"status": "ok", "message": f"Fetched new items for keyword '{keyword}'"}
     except Exception as e:
