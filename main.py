@@ -1,4 +1,3 @@
-import asyncio
 import os
 import logging
 from fastapi import FastAPI, Request
@@ -9,34 +8,31 @@ from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from mercapi.requests import SearchRequestData
 from zoneinfo import ZoneInfo
+
 # ---------------- Logging 設定 ----------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    force=True  # 確保在 Vercel 重設 logging 設定
+    force=True
 )
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
 # ---------------- LINE 配置 ----------------
-FETCH_INTERVAL_MINUTES = int(os.getenv("FETCH_INTERVAL_MINUTES") or 10)
-FETCH_SINCE_MINUTES = 60
+FETCH_SINCE_MINUTES = int(os.getenv("FETCH_SINCE_MINUTES") or 60)
 LINE_TOKEN = os.getenv("LINE_TOKEN") or "IZXRGHe2cGK69Yrhpfif+255qo2iQFG87X/hbblkEOkZl2kNsyBBJGJd43PzmRpx5uiRseir5bnkxpDKI+9fzJLVY3Qe4mKKMXlKouyTs/Epn0qHyMwMIBt9S6/UXW45tG7Uieg73nQ/8xQAzUJcGwdB04t89/1O/w1cDnyilFU="
 MERCARI_KEYWORD = os.getenv("MERCARI_KEYWORD") or "オラフ スヌーピー ぬいぐるみ"
 
 # ---------------- 時區處理 ----------------
-# 預設台灣時區 (Asia/Taipei)，也可以換成 Asia/Tokyo, UTC 等
 USER_TZ = os.getenv("USER_TIMEZONE", "Asia/Taipei")
 
 def to_utc_aware(dt: datetime) -> datetime:
-    """將 naive datetime 視為 UTC 並轉成 aware"""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
 def to_user_time(dt: datetime) -> datetime:
-    """轉換 UTC datetime 到使用者時區"""
     dt = to_utc_aware(dt)
     return dt.astimezone(ZoneInfo(USER_TZ))
 
@@ -68,7 +64,6 @@ async def send_reply_message(reply_token, messages):
 def build_flex_message(items, keyword, minutes, max_items=5):
     columns = []
 
-    # Summary
     start_time = to_user_time(datetime.now(timezone.utc) - timedelta(minutes=minutes))
     end_time = to_user_time(datetime.now(timezone.utc))
     summary_text = (
@@ -90,7 +85,6 @@ def build_flex_message(items, keyword, minutes, max_items=5):
         }
     })
 
-    # 最新商品
     for item in items[:max_items]:
         created_tw = to_user_time(item["created"])
         created_str = created_tw.strftime("%Y-%m-%d %H:%M")
@@ -132,7 +126,6 @@ def build_flex_message(items, keyword, minutes, max_items=5):
             }
         })
 
-    # 查看全部按鈕
     if len(items) > max_items:
         search_url = f"https://jp.mercari.com/search?keyword={quote(keyword)}&sort=created_time&order=desc"
         columns.append({
@@ -166,7 +159,6 @@ async def check_new_items(keyword, since_minutes=60):
         sort_order=SearchRequestData.SortOrder.ORDER_DESC,
     )
     new_items = []
-
     time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
     logger.info(f"[DEBUG] Time threshold: {time_threshold}")
 
@@ -187,20 +179,17 @@ async def check_new_items(keyword, since_minutes=60):
         payload = build_flex_message(new_items, keyword, since_minutes)
         await send_broadcast_message(payload)
 
-# ---------------- Background Task ----------------
-async def periodic_fetch():
-    while True:
-        try:
-            keyword = os.getenv("MERCARI_KEYWORD") or MERCARI_KEYWORD
-            minutes = int(os.getenv("FETCH_SINCE_MINUTES") or 60)
-            await check_new_items(keyword, since_minutes=minutes)
-        except Exception as e:
-            logger.error(f"[ERROR] Background fetch failed: {e}")
-        await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(periodic_fetch())
+# ---------------- CRON Endpoint ----------------
+@app.get("/cron")
+async def cron_fetch():
+    try:
+        keyword = os.getenv("MERCARI_KEYWORD") or MERCARI_KEYWORD
+        minutes = int(os.getenv("FETCH_SINCE_MINUTES") or FETCH_SINCE_MINUTES)
+        await check_new_items(keyword, since_minutes=minutes)
+        return {"status": "ok", "message": f"Fetched new items for keyword '{keyword}'"}
+    except Exception as e:
+        logger.error(f"[ERROR] Cron fetch failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 # ---------------- LINE Webhook ----------------
 class LineEvent(BaseModel):
@@ -230,7 +219,6 @@ async def line_webhook(req: Request):
                 sort_order=SearchRequestData.SortOrder.ORDER_DESC
             )
             new_items = []
-
             time_threshold = datetime.now(timezone.utc) - timedelta(minutes=minutes)
             for item in results.items:
                 item_created = to_utc_aware(item.created)
