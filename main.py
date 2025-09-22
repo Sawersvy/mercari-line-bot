@@ -151,7 +151,7 @@ async def check_new_items(keyword, since_minutes=60):
         sort_order=SearchRequestData.SortOrder.ORDER_DESC,
     )
     new_items = []
-    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes) + OVERLAP_MINUTES
+    time_threshold = datetime.now(timezone.utc) - timedelta(minutes=since_minutes + OVERLAP_MINUTES) 
     logger.info(f"[DEBUG] Time threshold: {time_threshold}")
     for item in results.items:
         item_updated = to_utc_aware(item.updated)
